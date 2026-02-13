@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
 # hash generation library for rePear, the iPod database management tool
 # Copyright (C) 2008 Martin J. Fiedler <martin.fiedler@gmx.net>
@@ -18,10 +18,10 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
-import os, types, re, sha
+import os, re, hashlib
 
 try:
-    import _winreg
+    import winreg
     HaveWin32 = True
 except ImportError:
     HaveWin32 = False
@@ -30,7 +30,7 @@ def GetFWIDs_Win32():
     # phase 1: enumerate all mass storage devices
     if not HaveWin32: return []
     try:
-        key = _winreg.OpenKey(_winreg.HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Services\\Disk\\Enum", 0, _winreg.KEY_QUERY_VALUE)
+        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Services\\Disk\\Enum", 0, winreg.KEY_QUERY_VALUE)
     except:
         raise
         return []
@@ -38,9 +38,9 @@ def GetFWIDs_Win32():
     devid = 0
     try:
         while True:
-            dev = _winreg.QueryValueEx(key, str(devid))[0]
-            if type(dev) == types.UnicodeType:
-                dev = dev.encode('ascii', 'replace')
+            dev = winreg.QueryValueEx(key, str(devid))[0]
+            if isinstance(dev, bytes):
+                dev = dev.decode('ascii', 'replace')
             devs.append(dev.upper())
             devid += 1
     except:
@@ -73,7 +73,7 @@ def GetFWIDs_Linux26():
             f = open(os.path.join(devdir, filename), "rb")
             data = f.read()
             f.close()
-            return data.split("\0", 1)[0].strip().upper()
+            return data.split(b"\0", 1)[0].strip().decode('ascii', 'replace').upper()
         except IOError:
             return ""
     fwids = []
@@ -202,18 +202,18 @@ def gcd(a, b):
 def lcm(a, b):
     if not(a) or not(b):
         return 1
-    return a * b / gcd(a, b)
+    return a * b // gcd(a, b)
 
 
 def UpdateHash(db, fwid):
     # extract dbid, zero out all hash stuff and add hash indicator
     dbid = db[24:32]
     hash2 = db[50:70]
-    z = 20 * "\0"
-    db = db[:24] + (8 * "\0") + db[32:48] + "\x01\x00" + z + db[70:88] + z + db[108:]
+    z = 20 * b"\0"
+    db = db[:24] + (8 * b"\0") + db[32:48] + b"\x01\x00" + z + db[70:88] + z + db[108:]
 
     # convert fwid to byte array
-    fwid = [int(fwid[i:i+2], 16) for i in xrange(0, 16, 2)]
+    fwid = [int(fwid[i:i+2], 16) for i in range(0, 16, 2)]
 
     # key generation, step 1: take LCM of each two bytes in the FWID in turn
     key = 16 * [0]
@@ -230,19 +230,19 @@ def UpdateHash(db, fwid):
     key = [inv[x] for x in key]
     # step 3: create hash key
     key = fixed + key
-    key = map(ord, sha.new("".join(map(chr, key))).digest())
+    key = list(hashlib.sha1(bytes(key)).digest())
 
     # first XOR
     key = [(x ^ 0x36) for x in key] + 44 * [0x36]
 
     # first SHA
-    h = sha.new("".join(map(chr, key)) + db).digest()
+    h = hashlib.sha1(bytes(key) + db).digest()
 
     # second XOR
     key = [(x ^ (0x36 ^ 0x5C)) for x in key]
 
     # second SHA
-    h = sha.new("".join(map(chr, key)) + h).digest()
+    h = hashlib.sha1(bytes(key) + h).digest()
 
     # reassemble database
     return db[:24] + dbid + db[32:50] + hash2 + db[70:88] + h + db[108:]
@@ -250,29 +250,29 @@ def UpdateHash(db, fwid):
 
 ################################################################################
 
-    
+
 if __name__ == "__main__":
     import sys
     fwids = GetFWIDs()
-    print "detected FWIDs:", fwids
+    print("detected FWIDs:", fwids)
     if fwids:
         fwid = fwids[0]
     else:
         fwid = "000A27001B3EAD37"
-        print "no FWID detected, using default FWID for BIST"
+        print("no FWID detected, using default FWID for BIST")
 
     try:
-        old = file(sys.argv[1], "rb").read()
+        old = open(sys.argv[1], "rb").read()
     except IndexError:
         sys.exit(0)
     new = UpdateHash(old, "000A27001B3EAD37")
-    print "old =>", " ".join(["%02X" % ord(c) for c in old[88:108]])
-    print "new =>", " ".join(["%02X" % ord(c) for c in new[88:108]])
+    print("old =>", " ".join(["%02X" % c for c in old[88:108]]))
+    print("new =>", " ".join(["%02X" % c for c in new[88:108]]))
     if old == new:
-        print "MATCH!"
+        print("MATCH!")
     else:
-        print "no match :("
+        print("no match :(")
     try:
-        file(sys.argv[2], "wb").write(new)
+        open(sys.argv[2], "wb").write(new)
     except IndexError:
         pass

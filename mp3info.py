@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
 # audio file information library for rePear, the iPod database management tool
 # Copyright (C) 2006-2008 Martin J. Fiedler <martin.fiedler@gmx.net>
@@ -115,8 +115,8 @@ ID3v2FrameMap = {
     "COMM": "comment"
 }
 
-RE_ID3v2_Frame_Type = re.compile(r'[A-Z0-9]{4}')
-RE_ID3v2_Strip_Genre = re.compile(r'\([0-9]+\)(.*)')
+RE_ID3v2_Frame_Type = re.compile(br'[A-Z0-9]{4}')
+RE_ID3v2_Strip_Genre = re.compile(br'\([0-9]+\)(.*)')
 
 
 ################################################################################
@@ -129,27 +129,27 @@ def GetID3v1(f, info):
         data = f.read(128)
     except IOError:
         return 0
-    if len(data)!=128 or data[:3]!="TAG":
+    if len(data)!=128 or data[:3]!=b"TAG":
         return 0
     info['tag'] = "id3v1"
-    field = data[3:33].split("\0",1)[0].strip()
-    if field: info['title'] = unicode(field, sys.getfilesystemencoding(), 'replace')
-    field = data[33:63].split("\0",1)[0].strip()
-    if field: info['artist'] = unicode(field, sys.getfilesystemencoding(), 'replace')
-    field = data[63:93].split("\0",1)[0].strip()
-    if field: info['album'] = unicode(field, sys.getfilesystemencoding(), 'replace')
-    field = data[93:97].split("\0",1)[0].strip()
+    field = data[3:33].split(b"\0",1)[0].strip()
+    if field: info['title'] = field.decode(sys.getfilesystemencoding(), 'replace')
+    field = data[33:63].split(b"\0",1)[0].strip()
+    if field: info['artist'] = field.decode(sys.getfilesystemencoding(), 'replace')
+    field = data[63:93].split(b"\0",1)[0].strip()
+    if field: info['album'] = field.decode(sys.getfilesystemencoding(), 'replace')
+    field = data[93:97].split(b"\0",1)[0].strip()
     if field:
         try:
             info['year'] = int(field)
         except ValueError:
             pass
-    field = data[97:127].split("\0",1)[0].strip()
-    if field: info['comment'] = unicode(field, sys.getfilesystemencoding(), 'replace')
-    if data[125]=='\0' and data[126]!='\0':
-        info['track number'] = ord(data[126])
+    field = data[97:127].split(b"\0",1)[0].strip()
+    if field: info['comment'] = field.decode(sys.getfilesystemencoding(), 'replace')
+    if data[125]==0 and data[126]!=0:
+        info['track number'] = data[126]
     try:
-        info['genre'] = ID3v1Genres[ord(data[127])]
+        info['genre'] = ID3v1Genres[data[127]]
     except KeyError:
         pass
     return -128
@@ -162,20 +162,20 @@ def GetID3v1(f, info):
 def DecodeInteger(s):
     res = 0
     for c in s:
-        res = (res << 8) | ord(c)
+        res = (res << 8) | c
     return res
 
 def DecodeSyncsafeInteger(s):
     res = 0
     for c in s:
-        res = (res << 7) | (ord(c) & 0x7F)
+        res = (res << 7) | (c & 0x7F)
     return res
 
 
 def GetCharset(encoding):
-    if encoding=="\1":  return "utf_16"
-    if encoding=="\2":  return "utf_16_be"
-    if encoding=="\3":  return "utf_8"
+    if encoding==1:  return "utf_16"
+    if encoding==2:  return "utf_16_be"
+    if encoding==3:  return "utf_8"
     else:               return "iso-8859-1"
 
 
@@ -183,12 +183,12 @@ def GetEndID3v2(f, offset=0):
     try:
         f.seek(offset-10, 2)
         marker = f.read(10)
-        if len(marker)!=10 or marker[:3]!="3DI":
+        if len(marker)!=10 or marker[:3]!=b"3DI":
             return None
         size = DecodeSyncsafeInteger(marker[-4:]) + 10
         f.seek(offset-10-size, 2)
         data = f.read(size)
-        if len(data)!=size or data[:3]!="ID3":
+        if len(data)!=size or data[:3]!=b"ID3":
             return None
         return data
     except IOError:
@@ -199,7 +199,7 @@ def GetStartID3v2(f):
     try:
         f.seek(0)
         marker = f.read(10)
-        if len(marker)!=10 or marker[:3]!="ID3":
+        if len(marker)!=10 or marker[:3]!=b"ID3":
             return None
         size = DecodeSyncsafeInteger(marker[-4:])
         payload = f.read(size)
@@ -211,14 +211,14 @@ def GetStartID3v2(f):
 
 
 def DecodeID3v2(data, info):
-    info['tag'] = "id3v2.%d.%d" % (ord(data[3]), ord(data[4]))
-    if ord(data[3]) >= 4:
+    info['tag'] = "id3v2.%d.%d" % (data[3], data[4])
+    if data[3] >= 4:
         decode_size = DecodeSyncsafeInteger
     else:
         decode_size = DecodeInteger
 
     # parse header flags, strip header(s)
-    flags = ord(data[5])
+    flags = data[5]
     data = data[10:]
     if flags & 0x40:  # extended header
         size = decode_size(data[:4])
@@ -231,9 +231,9 @@ def DecodeID3v2(data, info):
             break  # invalid frame name or start of padding => bail out
         size = decode_size(data[4:8])
         payload = data[10:size+10]
-        flags = ord(data[9])
+        flags = data[9]
         if flags & 0x02:
-            payload = payload.replace("\xff\0", "\xff")
+            payload = payload.replace(b"\xff\0", b"\xff")
         if flags & 0x04:
             try:
                 payload = zlib.decompress(payload)
@@ -247,30 +247,31 @@ def HandleID3v2Frame(frame, payload, flags, info):
     text = None
     if not payload: return  # empty payload
 
-    if frame[0]=='T' and frame!="TXXX":
+    frame_name = frame.decode('latin1', 'replace')
+    if frame_name.startswith('T') and frame_name != "TXXX":
         # text frame
         charset = GetCharset(payload[0])
-        text = unicode(payload[1:], charset, 'replace').split(u'\0', 1)[0]
+        text = str(payload[1:], charset, 'replace').split('\0', 1)[0]
 
-    elif frame[0]=='W' and frame!="WXXX":
+    elif frame_name.startswith('W') and frame_name != "WXXX":
         # URL
-        text = unicode(payload.split("\0", 1)[0], "iso-8859-1", 'replace')
+        text = str(payload.split(b"\0", 1)[0], "iso-8859-1", 'replace')
 
-    elif frame=="COMM":
+    elif frame_name=="COMM":
         # comment
         charset = GetCharset(payload[0])
-        lang = payload[1:4].split("\0", 1)[0]
-        parts = unicode(payload[4:], charset, 'replace').split(u'\0', 2)
+        lang = payload[1:4].split(b"\0", 1)[0]
+        parts = str(payload[4:], charset, 'replace').split('\0', 2)
         if len(parts)<2: return  # broken frame
         text = parts[1]
 
     if text:  ##### apply the current textual frame ####
-        key = ID3v2FrameMap.get(frame, frame)
+        key = ID3v2FrameMap.get(frame_name, frame_name)
         text = text.strip()
 
-        if frame=="TCON":  # strip crappy numerical genre comment
+        if frame_name=="TCON":  # strip crappy numerical genre comment
             m = RE_ID3v2_Strip_Genre.match(text.encode('iso-8859-1', 'replace'))
-            if m: text = m.group(1)
+            if m: text = m.group(1).decode('iso-8859-1', 'replace')
 
         if key[0]=="#":  # numerical key
             try:
@@ -302,8 +303,8 @@ def DecodeVorbisHeader(f, info):
         data = f.read(4096)   # almost one page, should be enough
     except IOError:
         return False
-    if data[:4]!="OggS": return False  # no Ogg -- don't bother
-    data = data.split("vorbis", 3)
+    if data[:4]!=b"OggS": return False  # no Ogg -- don't bother
+    data = data.split(b"vorbis", 3)
     if len(data)!=4: return False  # no Vorbis packets
     info['format'] = "ogg"  # at this point, we can assume the stream is valid
     info['filetype'] = "Ogg Vorbis"
@@ -312,7 +313,7 @@ def DecodeVorbisHeader(f, info):
 
     # encoder version
     size = struct.unpack("<L", data[:4])[0]
-    if size: info['encoder'] = unicode(data[4:size+4], "utf_8", 'replace')
+    if size: info['encoder'] = str(data[4:size+4], "utf_8", 'replace')
     data = data[size+4:]
 
     # field count
@@ -321,21 +322,21 @@ def DecodeVorbisHeader(f, info):
     data = data[4:]
 
     # field data
-    for i in xrange(count):
+    for i in range(count):
         if len(data)<4: break  # comment packet too short
         size = struct.unpack("<L", data[:4])[0]
         if size:
             line = data[4:size+4]
-            if "=" in line:
-                key, value = line.split('=', 1)
+            if b"=" in line:
+                key, value = line.split(b'=', 1)
                 value = value.strip()
-                if key=="TRACKNUMBER":
+                if key==b"TRACKNUMBER":
                     try:
                         info["track number"] = int(value)
                     except ValueError:
                         pass
                 else:
-                    info[key.lower()] = unicode(value, "utf_8", 'replace')
+                    info[key.decode('utf_8', 'replace').lower()] = str(value, "utf_8", 'replace')
         data = data[size+4:]
 
     return True
@@ -374,9 +375,9 @@ def ScanMP3(f, info, start_offset=0):
         # search for the start of the MP3 data part
         pos = 0
         while True:
-            pos = sample.find("\xff", pos)
+            pos = sample.find(b"\xff", pos)
             if pos<0: return False
-            if IsValidMP3Header(map(ord, sample[pos:pos+4])): break
+            if IsValidMP3Header(list(sample[pos:pos+4])): break
             pos += 1
         f.seek(start_offset + pos)
 
@@ -389,7 +390,7 @@ def ScanMP3(f, info, start_offset=0):
     total_bytes = 0
     used_bitrates = {}
     force_vbr = False
-    data = ""
+    data = b""
 
     # scan the file
     while True:
@@ -400,14 +401,14 @@ def ScanMP3(f, info, start_offset=0):
         if len(header)!=4: break
 
         # reject frames that do not look like MP3
-        header = map(ord, header)
+        header = list(header)
         if not IsValidMP3Header(header):
             # OK, this file is broken. try to re-synchronize.
             resync_pos = f.tell()
             try:
                 # search for the first 8 bits of a frame sync marker in the
                 # next 4 KiB
-                pos = f.read(4096).find("\xff")
+                pos = f.read(4096).find(b"\xff")
             except IOError:
                 break
             if pos < 0:
@@ -444,21 +445,21 @@ def ScanMP3(f, info, start_offset=0):
         if total_frames == 10:
             valid = False
             # check for Xing/LAME VBR header
-            p2 = data.find("Xing\0\0\0")
-            if (p2 > 0) and (ord(data[p2 + 7]) & 1):
+            p2 = data.find(b"Xing\0\0\0")
+            if (p2 > 0) and (data[p2 + 7] & 1):
                 force_vbr = True
             # check for LAME CBR header
-            p = data.find("Info\0\0\0")
-            if force_vbr or ((p > 0) and (ord(data[p + 7]) & 1)):
+            p = data.find(b"Info\0\0\0")
+            if force_vbr or ((p > 0) and (data[p + 7] & 1)):
                 if force_vbr: p = p2
                 total_frames, total_bytes = struct.unpack(">ii", data[p+8:p+16])
-                if not(ord(data[p + 7]) & 2):
+                if not(data[p + 7] & 2):
                     total_bytes = info['size']  # size not specified, estimate
                 total_samples = total_frames * samples
                 valid = True
             # check for FhG header
             else:
-                p = data.find("VBRI\0\1")
+                p = data.find(b"VBRI\0\1")
                 if p > 0:
                     force_vbr = True
                     total_bytes, total_frames = struct.unpack(">ii", data[p+10:p+18])
@@ -515,7 +516,7 @@ def DecodeMP4(f, info):
         first_atom = f.read(8)[4:]
     except IOError:
         return False
-    if not(first_atom in ('moov', 'ftyp')):
+    if not(first_atom in (b'moov', b'ftyp')):
         return False  # no MP4 file
     try:
         qt = qtparse.QTParser(f)
@@ -545,7 +546,7 @@ def GetAudioFileInfo(filename, stat_only=False):
     track = 0
     for c in os.path.split(filename)[-1]:
         if c in "0123456789":
-            track = (10 * track) + ord(c) - 48
+            track = (10 * track) + int(c)
         else:
             break
     if track:
@@ -553,7 +554,7 @@ def GetAudioFileInfo(filename, stat_only=False):
 
     # open the file
     try:
-        f = file(filename, "rb")
+        f = open(filename, "rb")
     except IOError:
         return None
 
@@ -587,21 +588,19 @@ def GetAudioFileInfo(filename, stat_only=False):
 
 if __name__=="__main__":
     if len(sys.argv)<2:
-        print "Usage:", sys.argv[0], "<FILES>..."
+        print("Usage:", sys.argv[0], "<FILES>...")
         sys.exit(1)
     for filename in sys.argv[1:]:
-        print
-        print "[%s]" % filename
+        print()
+        print("[%s]" % filename)
         info = GetAudioFileInfo(filename)
         if not info: continue
-        keys = info.keys()
+        keys = list(info.keys())
         keys.sort()
-        fmt = "%%-%ds= %%s" % (max(map(len, keys)) + 1)
+        fmt = "%%-%ds= %%s" % (max(list(map(len, keys))) + 1)
         for key in keys:
             value = info[key]
-            try:
-                value = value.encode('iso-8859-1', 'replace')
-            except:
-                pass
-            print fmt % (key, value)
-        print
+            if isinstance(value, bytes):
+                value = value.decode('iso-8859-1', 'replace')
+            print(fmt % (key, value))
+        print()

@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
 # last.fm scrobbling library for rePear, the iPod database management tool
 # Copyright (C) 2008 Martin J. Fiedler <martin.fiedler@gmx.net>
@@ -17,7 +17,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
-import sys, urllib, urllib2, re, time, md5, types, fnmatch, os
+import sys, urllib.request, urllib.parse, urllib.error, re, time, hashlib, fnmatch, os
 
 try:
     import repear
@@ -32,9 +32,11 @@ max_queue = 50
 
 
 def utf8urlencode(x):
-    if type(x) != types.UnicodeType:
-        x = unicode(x, sys.getfilesystemencoding(), 'replace')
-    return urllib.quote(x.encode('utf-8', 'replace'))
+    if isinstance(x, bytes):
+        x = x.decode(sys.getfilesystemencoding(), 'replace')
+    else:
+        x = str(x)
+    return urllib.parse.quote_from_bytes(x.encode('utf-8', 'replace'))
 
 
 class ScrobbleError(Exception): pass
@@ -56,7 +58,7 @@ class Scrobbler:
 
     def config(self, filename):
         try:
-            f = file(filename, "r")
+            f = open(filename, "r")
             for line in f:
                 line = line.split(';', 1)[0]
                 if not(line) or not('=' in line):
@@ -82,11 +84,11 @@ class Scrobbler:
 
     def load(self, filename):
         try:
-            f = file(filename, "r")
+            f = open(filename, "r")
             for line in f:
                 line = line.strip().split('&')
                 try:
-                    line[0] = long(line[0])
+                    line[0] = int(line[0])
                 except ValueError:
                     line = []
                 if len(line) == 6:
@@ -99,7 +101,7 @@ class Scrobbler:
     def save(self, filename):
         data = "\n".join(["&".join(map(str, item)) for item in self.queue]) + "\n"
         try:
-            f = file(filename, "w")
+            f = open(filename, "w")
             f.write(data)
             f.close()
         except IOError:
@@ -112,8 +114,10 @@ class Scrobbler:
     def enqueue(self, item):
         path = item.get('original path', None) or item.get('path', None)
         if self.excludes and path:
-            if type(path) == types.UnicodeType:
-                path = path.encode(sys.getfilesystemencoding(), 'replace')
+            if isinstance(path, bytes):
+                path = path.decode(sys.getfilesystemencoding(), 'replace')
+            else:
+                path = str(path)
             path = path.lower()
             for pattern in self.excludes:
                 if fnmatch.fnmatch(path, pattern):
@@ -121,8 +125,8 @@ class Scrobbler:
         try:
             artist = utf8urlencode(item['artist'])
             title = utf8urlencode(item['title'])
-            length = str(long(item['length']))
-            playtime = long(item['last played time'])
+            length = str(int(item['length']))
+            playtime = int(item['last played time'])
         except KeyError:
             return
         album = utf8urlencode(item.get('album', ''))
@@ -131,7 +135,7 @@ class Scrobbler:
 
     def scrobble(self):
         if not(self.user) or not(self.password):
-            raise ScrobbleError, "user name or password missing"
+            raise ScrobbleError("user name or password missing")
         if not(self.queue):
             return
 
@@ -139,51 +143,53 @@ class Scrobbler:
         if re.match(r'^[0-9a-fA-F]{32}$', self.password):
             self.password = self.password.lower()
         else:
-            self.password = md5.md5(self.password).hexdigest()
-        timestamp = str(long(time.time()))
-        auth = md5.md5(self.password + timestamp).hexdigest()
-        req = urllib2.Request(
+            self.password = hashlib.md5(self.password.encode('utf-8', 'replace')).hexdigest()
+        timestamp = str(int(time.time()))
+        auth = hashlib.md5((self.password + timestamp).encode('ascii')).hexdigest()
+        req = urllib.request.Request(
             "%s?hs=true&p=%s&c=%s&v=%s&u=%s&t=%s&a=%s" % \
             (server, protocol_version, client_id, client_ver, self.user, timestamp, auth))
 
         # send and read authentication request
         try:
-            res = urllib2.urlopen(req).read()
+            res = urllib.request.urlopen(req).read()
 #            res = "OK\nfoobar\n\nhttp://localhost:1337/foo"
-        except urllib2.HTTPError, e:
-            raise ScrobbleError, "HTTP %d in authentication phase" % e.code
-        except urllib2.URLError, e:
-            raise ScrobbleError, "network error in authentication phase: %s" % e.reason.args[1]
+        except urllib.error.HTTPError as e:
+            raise ScrobbleError("HTTP %d in authentication phase" % e.code)
+        except urllib.error.URLError as e:
+            raise ScrobbleError("network error in authentication phase: %s" % e.reason)
         except IOError:
-            raise ScrobbleError, "read error in authentication phase"
+            raise ScrobbleError("read error in authentication phase")
+        if isinstance(res, bytes):
+            res = res.decode('utf-8', 'replace')
         res = [line.strip() for line in res.split("\n")]
         code = res[0].split()[0].upper()
 
         # check authentication response
         if code == "BANNED":
-            raise ScrobbleError, "client banned"
+            raise ScrobbleError("client banned")
         elif code == "BADAUTH":
-            raise ScrobbleError, "invalid username or password"
+            raise ScrobbleError("invalid username or password")
         elif code == "BADTIME":
-            raise ScrobbleError, "system clock is skewed"
+            raise ScrobbleError("system clock is skewed")
         elif code == "FAILED":
-            raise ScrobbleError, res[0].split(" ", 1)[-1]
+            raise ScrobbleError(res[0].split(" ", 1)[-1])
         elif code != "OK":
-            raise ScrobbleError, "invalid answer from server: " + res[0]
+            raise ScrobbleError("invalid answer from server: " + res[0])
         try:
             sid = res[1]
             url = res[3]
         except IndexError:
-            raise ScrobbleError, "malformed authentication response"
+            raise ScrobbleError("malformed authentication response")
         if not url.startswith("http://"):
-            raise ScrobbleError, "malformed authentication response"
+            raise ScrobbleError("malformed authentication response")
 
         # submit queued items
         self.queue.sort()
         while self.queue:
             # build POST request string
             data = "s=" + sid
-            for i in xrange(min(len(self.queue), 50)):
+            for i in range(min(len(self.queue), 50)):
                 playtime, artist, title, length, album, track = self.queue[i]
                 data += "&a[%d]=%s&t[%d]=%s&i[%d]=%d&o[%d]=P&r[%d]=&l[%d]=%s&b[%d]=%s&n[%d]=%s&m[%d]=" % \
                     (i, artist, i, title, i, playtime, i, i, i, length, i, album, i, track, i)
@@ -191,24 +197,26 @@ class Scrobbler:
 
             # send and read submission request
             try:
-                res = urllib2.urlopen(url, data).read()
+                res = urllib.request.urlopen(url, data.encode('ascii', 'replace')).read()
 #                res = "mist"
-            except urllib2.HTTPError, e:
-                raise ScrobbleError, "HTTP %d in submission phase" % e.code
-            except urllib2.URLError, e:
-                raise ScrobbleError, "network error in submission phase: %s" % e.reason.args[1]
+            except urllib.error.HTTPError as e:
+                raise ScrobbleError("HTTP %d in submission phase" % e.code)
+            except urllib.error.URLError as e:
+                raise ScrobbleError("network error in submission phase: %s" % e.reason)
             except IOError:
-                raise ScrobbleError, "read error in submission phase"
+                raise ScrobbleError("read error in submission phase")
+            if isinstance(res, bytes):
+                res = res.decode('utf-8', 'replace')
             res = res.strip().split("\n", 1)[0].strip()
             code = res.split()[0].upper()
 
             # check response
             if code == "BADSESSION":
-                raise ScrobbleError, "invalid session while submitting"
+                raise ScrobbleError("invalid session while submitting")
             elif code == "FAILED":
-                raise ScrobbleError, res.split(" ", 1)[-1]
+                raise ScrobbleError(res.split(" ", 1)[-1])
             elif code != "OK":
-                raise ScrobbleError, "invalid answer from server: " + res
+                raise ScrobbleError("invalid answer from server: " + res)
 
             # finally, remove items from the queue
             del self.queue[:max_queue]
@@ -217,27 +225,27 @@ class Scrobbler:
 if __name__ == "__main__":
     s = Scrobbler()
     s.load()
-    print "old queue:", len(s.queue), "items"
+    print("old queue:", len(s.queue), "items")
     s += {
-        'last played time': 1205685904L,
-        'album': u'Story of Ohm',
-        'artist': u'paniq',
+        'last played time': 1205685904,
+        'album': 'Story of Ohm',
+        'artist': 'paniq',
         'length': 310.43918367346942,
-        'title': u'Liberation',
+        'title': 'Liberation',
         'track number': 4,
     }
     s += {
-        'last played time': 1205686220L,
-        'album': u'Story of Ohm',
-        'artist': u'paniq',
+        'last played time': 1205686220,
+        'album': 'Story of Ohm',
+        'artist': 'paniq',
         'length': 228.04897959183674,
-        'title': u'Story of Ohm',
+        'title': 'Story of Ohm',
         'track number': 6,
     }
-    print "new queue:", len(s.queue), "items"
+    print("new queue:", len(s.queue), "items")
     try:
         s.scrobble()
-    except ScrobbleError, e:
-        print e
-    print "after scrobbling:", len(s.queue), "items"
+    except ScrobbleError as e:
+        print(e)
+    print("after scrobbling:", len(s.queue), "items")
     s.save()

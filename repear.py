@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
 # rePear, the iPod database management tool
 # Copyright (C) 2006-2008 Martin J. Fiedler <martin.fiedler@gmx.net>
@@ -135,8 +135,9 @@ ARTWORK_CACHE_FILE = ARTWORK_DIR + "repear.artwork_cache"
 ARTWORK_DB_FILE = ARTWORK_DIR + "ArtworkDB"
 def OLDNAME(x): return x.replace("repear", "retune")
 
-import sys, optparse, os, fnmatch, stat, string, time, types, cPickle, random
-import re, warnings, traceback, getpass, md5
+import sys, optparse, os, fnmatch, stat, string, time, types, pickle, random
+import re, warnings, traceback, getpass, hashlib
+from functools import cmp_to_key
 warnings.filterwarnings('ignore', category=RuntimeWarning)  # for os.tempnam()
 import iTunesDB, mp3info, hash58, scrobble
 Options = {}
@@ -183,7 +184,7 @@ def quit(code=1):
     if not Options.get('nowait', True):  # Windows: wait for keypress
         log("Press ENTER to close this window. ", True)
         try:
-            raw_input()
+            input()
         except (IOError, EOFError, KeyboardInterrupt):
             pass  # I don't care at this point, we're going to leave anyway
     sys.exit(code)
@@ -196,7 +197,7 @@ def confirm(prompt):
     sys.stdout.write("%sDo you really want to continue? (y/N) " % prompt)
     sys.stdout.flush()
     try:
-        answer = raw_input()
+        answer = input()
     except (IOError, EOFError, KeyboardInterrupt):
         answer = ""
     if answer.strip().lower() in ("y", "yes"):
@@ -233,7 +234,7 @@ def goto_root_dir():
 
     try:
         os.chdir(rootdir)
-    except OSError, e:
+    except OSError as e:
         fatal("can't change to the iPod root directory: %s" % e.strerror)
 
 
@@ -247,19 +248,19 @@ def load_cache(return_on_error=None):
         except IOError:
             return return_on_error
     try:
-        content = cPickle.load(f)
+        content = pickle.load(f)
         f.close()
-    except (IOError, EOFError, cPickle.PickleError):
+    except (IOError, EOFError, pickle.PickleError):
         return return_on_error
     return content
 
 def save_cache(content=None):
     try:
         f = open(CACHE_FILE, "wb")
-        cPickle.dump(content, f)
+        pickle.dump(content, f)
         f.close()
         delete(OLDNAME(CACHE_FILE), True)
-    except (IOError, EOFError, cPickle.PickleError):
+    except (IOError, EOFError, pickle.PickleError):
         log("ERROR: can't save the rePear cache\n")
 
 
@@ -274,7 +275,7 @@ def execute(program, args):
         path = program
     try:
         return spawn(os.P_WAIT, path, [program] + args)
-    except OSError, e:
+    except OSError as e:
         log("ERROR: can't execute %s: %s\n" % (program, e.strerror))
     except KeyboardInterrupt:
         return -2
@@ -288,12 +289,17 @@ def execute(program, args):
 ################################################################################
 
 def printable(x, kill_chars=""):
-    if type(x)==types.UnicodeType:
-        x = x.encode(sys.getfilesystemencoding(), 'replace')
-    x = str(x)
+    if isinstance(x, bytes):
+        x = x.decode(sys.getfilesystemencoding(), 'replace')
+    else:
+        x = str(x)
     for c in kill_chars:
         x = x.replace(c, "_")
     return x
+
+
+def cmp(a, b):
+    return (a > b) - (a < b)
 
 
 def move_file(src, dest):
@@ -314,7 +320,7 @@ def move_file(src, dest):
     if dest_dir and not(os.path.isdir(dest_dir)):
         try:
             os.makedirs(dest_dir)
-        except OSError, e:
+        except OSError as e:
             log("[FAILED]\nERROR: can't create destination directory `%s': %s\n" %
                 (printable(dest_dir), e.strerror), True)
             return 'mkdir'
@@ -322,7 +328,7 @@ def move_file(src, dest):
     # finally rename it
     try:
         os.rename(src, dest)
-    except OSError, e:
+    except OSError as e:
         log(" [FAILED]\nERROR: can't move `%s' to `%s': %s\n" %
             (printable(src), printable(dest), e.strerror), True)
         return 'move'
@@ -336,7 +342,7 @@ def backup(filename):
     try:
         os.rename(filename, dest)
         return True
-    except OSError, e:
+    except OSError as e:
         log("WARNING: Cannot backup `%s': %s\n" % (filename, e.strerror))
         return False
 
@@ -346,7 +352,7 @@ def delete(filename, may_fail=False):
     try:
         os.remove(filename)
         return True
-    except OSError, e:
+    except OSError as e:
         if not may_fail:
             log("ERROR: Cannot delete `%s': %s\n" % (filename, e.strerror))
         return False
@@ -368,10 +374,10 @@ def fnrep(fn):
 def fncmp(a, b):
     return cmp(fnrep(a), fnrep(b))
 def pathcmp(a, b):
-    a = a.split(u'/')
-    b = b.split(u'/')
+    a = a.split('/')
+    b = b.split('/')
     # compare base directories
-    for i in xrange(min(len(a), len(b)) - 1):
+    for i in range(min(len(a), len(b)) - 1):
         r = fncmp(a[i], b[i])
         if r: return r
     # subdirectories first
@@ -417,7 +423,7 @@ class Allocator:
             self.fmt = "F%02d"
         if not self.files:
             self.mkdir(0)
-        self.current_dir = min(self.files.iterkeys())
+        self.current_dir = min(self.files.keys())
 
     def getindex(self, name):
         if not name: raise ValueError
@@ -430,10 +436,10 @@ class Allocator:
         except OSError:
             return []
         dir_contents = [os.path.splitext(x)[0].upper() for x in dir_contents if x[0] != '.']
-        return dict(zip(dir_contents, [None] * len(dir_contents)))
+        return dict(list(zip(dir_contents, [None] * len(dir_contents))))
 
     def __len__(self):
-        return sum(map(len, self.files.itervalues()))
+        return sum(map(len, iter(self.files.values())))
 
     def __repr__(self):
         return "<Allocator: %d files in %d directories>" % (len(self), len(self.files))
@@ -458,7 +464,7 @@ class Allocator:
         self.files[index] = {}
 
     def allocate(self):
-        count, index = min([(len(d[1]), d[0]) for d in self.files.iteritems()])
+        count, index = min([(len(d[1]), d[0]) for d in self.files.items()])
         # need to allocate a new directory
         if (count >= self.files_per_dir) and (len(self.files) < self.max_dirs):
             available = [i for i in range(self.max_dirs) if not i in self.files]
@@ -494,7 +500,7 @@ class BalancedShuffle:
         self.root = { None: [] }
 
     def add(self, path, data):
-        if type(path) == types.UnicodeType:
+        if type(path) == str:
             path = path.encode('ascii', 'replace')
         path = path.replace("\\", "/").lower().split("/")
         if path and not(path[0]):
@@ -520,8 +526,8 @@ class BalancedShuffle:
         random.shuffle(root[None])
 
         # build a list of directories to shuffle
-        subdirs = filter(None, [root[None]] + \
-                  [self.shuffle(root[key]) for key in root if key])
+        subdirs = [_f for _f in [root[None]] + \
+                  [self.shuffle(root[key]) for key in root if key] if _f]
 
         # check for "tail" cases
         if not subdirs:
@@ -531,15 +537,15 @@ class BalancedShuffle:
 
         # pad subdirectory list to a common length
         dircount = len(subdirs)
-        maxlen = max(map(len, subdirs))
+        maxlen = max(list(map(len, subdirs)))
         subdirs = [self.fill(sd, maxlen) for sd in subdirs]
 
         # collect all items
         res = []
         last = -1
-        for i in xrange(maxlen):
+        for i in range(maxlen):
             # determine the directory order for this "column"
-            order = range(dircount)
+            order = list(range(dircount))
             random.shuffle(order)
             if (len(order) > 1) and (order[0] == last):
                 order.append(order.pop(0))
@@ -549,8 +555,7 @@ class BalancedShuffle:
             last = order[-1]
 
             # produce a result
-            res.extend(filter(lambda x: x is not None, \
-                       [subdirs[j][i] for j in order]))
+            res.extend([x for x in [subdirs[j][i] for j in order] if x is not None])
         return res
 
     def fill(self, data, total):
@@ -560,7 +565,7 @@ class BalancedShuffle:
             ones = total - ones
         bitmap = [0] * total
         remain = total
-        for fraction in xrange(ones, 0, -1):
+        for fraction in range(ones, 0, -1):
             bitmap[total - remain] = 1
             skip = float(remain) / fraction
             skip = random.randrange(int(0.9 * skip), int(1.1 * skip) + 2)
@@ -572,7 +577,7 @@ class BalancedShuffle:
         def decide(x):
             if x: return data.pop(0)
             return None
-        return map(decide, bitmap)
+        return list(map(decide, bitmap))
 
 
 ################################################################################
@@ -595,7 +600,7 @@ def ImportPlayCounts(cache, index, scrobbler=None):
     # parse old iTunesDB
     try:
         db = iTunesDB.DatabaseReader()
-        files = [printable(item.get('path', u'??')[1:].replace(u':', u'/')).lower() for item in db]
+        files = [printable(item.get('path', '??')[1:].replace(':', '/')).lower() for item in db]
         db.f.close()
         del db
     except (IOError, iTunesDB.InvalidFormat):
@@ -703,7 +708,7 @@ almost completely fail.
             # create a placeholder cache entry
             cache.append({
                 'path': src,
-                'original path': unicode(dest, sys.getfilesystemencoding(), 'replace')
+                'original path': printable(dest)
             })
     except IOError:
         fatal("can't read iTunes database file")
@@ -742,7 +747,7 @@ def check_file(base, fn):
 
 def make_cache_index(cache):
     index = {}
-    for i in xrange(len(cache)):
+    for i in range(len(cache)):
         for path in [cache[i][f] for f in ('path', 'original path') if f in cache[i]]:
             key = printable(path).lower()
             if key in index:
@@ -778,9 +783,11 @@ def move_music(src, dest, info):
 
         # generate new source filename (replace .ogg by .mp3)
         newsrc = info.get('original path', src)
-        if type(newsrc) != types.UnicodeType:
-            newsrc = unicode(newsrc, sys.getfilesystemencoding(), 'replace')
-        newsrc = u'.'.join(newsrc.split(u'.')[:-1]) + u'.mp3'
+        if isinstance(newsrc, bytes):
+            newsrc = newsrc.decode(sys.getfilesystemencoding(), 'replace')
+        else:
+            newsrc = str(newsrc)
+        newsrc = '.'.join(newsrc.split('.')[:-1]) + '.mp3'
 
         # decode the Ogg file
         res = execute("oggdec", ["-Q", "-o", tmp, src])
@@ -799,7 +806,7 @@ def move_music(src, dest, info):
                 lameopts.extend(["--"+optn, printable(info[key])])
         if 'genre' in info:
             ref_genre = printable(info['genre']).lower().replace(" ","")
-            for number, genre in mp3info.ID3v1Genres.iteritems():
+            for number, genre in mp3info.ID3v1Genres.items():
                 if genre.lower().replace(" ","") == ref_genre:
                     lameopts.extend(["--tg", str(number)])
                     break
@@ -838,7 +845,7 @@ def move_music(src, dest, info):
 def freeze_dir(cache, index, allocator, playlists=[], base="", artwork=None):
     global g_freeze_error_count
     try:
-        flist = filter(None, [check_file(base, fn) for fn in os.listdir(base or ".")])
+        flist = [_f for _f in [check_file(base, fn) for fn in os.listdir(base or ".")] if _f]
     except KeyboardInterrupt:
         raise
     except:
@@ -849,14 +856,14 @@ def freeze_dir(cache, index, allocator, playlists=[], base="", artwork=None):
         return []
 
     # generate directory list
-    directories = filter(lambda x: x[0] < 1, flist)
+    directories = [x for x in flist if x[0] < 1]
     directories.sort()
 
     # add playlist files
     playlists.extend([x[2] for x in flist if (x[0] > 0) and (x[4] == ".m3u")])
 
     # generate music file list
-    music = filter(lambda x: (x[0] > 0) and (x[4] in SUPPORTED_FILE_FORMATS), flist)
+    music = [x for x in flist if (x[0] > 0) and (x[4] in SUPPORTED_FILE_FORMATS)]
     music.sort()
 
     # if there are no subdirs and no music files here, prune this directory
@@ -874,7 +881,7 @@ def freeze_dir(cache, index, allocator, playlists=[], base="", artwork=None):
     for d0,d1,d2,d3,d4,key in music:
         if key in unassoc_images:
             del unassoc_images[key]
-    unassoc_images = unassoc_images.values()
+    unassoc_images = list(unassoc_images.values())
     unassoc_images.sort()
 
     # use one of the unassociated artwork files as this directory's artwork,
@@ -917,10 +924,10 @@ def freeze_dir(cache, index, allocator, playlists=[], base="", artwork=None):
                 iTunesDB.FillMissingTitleAndArtist(info)
                 info['changed'] = changed
                 if not already_there:
-                    if type(info['path']) == types.UnicodeType:
+                    if isinstance(info['path'], str):
                         info['original path'] = info['path']
                     else:
-                        info['original path'] = unicode(info['path'], sys.getfilesystemencoding(), 'replace')
+                        info['original path'] = printable(info['path'])
                     info['path'] = path
 
             # tag .m4b files as audiobooks
@@ -971,7 +978,7 @@ def freeze_dir(cache, index, allocator, playlists=[], base="", artwork=None):
         except KeyboardInterrupt:
             log("\nInterrupted by user.\nContinue with next file or abort? [c/A] ")
             try:
-                answer = raw_input()
+                answer = input()
             except (IOError, EOFError, KeyboardInterrupt):
                 answer = ""
             if not answer.lower().startswith("c"):
@@ -1020,9 +1027,9 @@ class cmp_key:
         if self.key in a:
             if self.key in b:
                 a = a[self.key]
-                if type(a) in (types.StringType, types.UnicodeType): a = a.lower()
+                if type(a) in (bytes, str): a = a.lower()
                 b = b[self.key]
-                if type(b) in (types.StringType, types.UnicodeType): b = b.lower()
+                if type(b) in (bytes, str): b = b.lower()
                 return order * cmp(a, b)
             else:
                 return -empty_pos
@@ -1063,21 +1070,21 @@ class SortSpec:
             self.criteria = []
 
     def parse(self, pattern):
-        self.criteria = filter(None, map(self._parse_criterion, pattern.split(',')))
+        self.criteria = [_f for _f in map(self._parse_criterion, pattern.split(',')) if _f]
 
     def _parse_criterion(self, text):
         text = text.strip()
         if not text: return None
         m = re_sortspec.match(text)
         if not m:
-            raise SSParseError, "invalid sort criterion `%s'" % text
+            raise SSParseError("invalid sort criterion `%s'" % text)
         text = m.group(2).strip()
         key = text.lower().replace('_', '').replace(' ', '')
         try:
             criterion = sort_criteria[key]
         except KeyError:
-            raise SSParseError, "unknown sort criterion `%s'" % text
-        if type(criterion) == types.StringType:
+            raise SSParseError("unknown sort criterion `%s'" % text)
+        if type(criterion) == bytes:
             criterion = cmp_key(criterion)
         modifiers = m.group(1) + m.group(3)
         order = 1
@@ -1095,7 +1102,7 @@ class SortSpec:
     def sort(self, tracks):
         self.tracks = tracks
         index = list(range(len(self.tracks)))
-        index.sort(self._cmp)
+        index.sort(key=cmp_to_key(self._cmp))
         del self.tracks
         return [tracks[i] for i in index]
 
@@ -1150,11 +1157,11 @@ def process_m3u(db, tracklist, index, filename, skip_album_playlists):
     if not(filename) or not(tracklist):
         return
     basedir, list_name = os.path.split(filename)
-    list_name = unicode(os.path.splitext(list_name)[0], sys.getfilesystemencoding(), 'replace')
+    list_name = printable(os.path.splitext(list_name)[0])
     log("Processing playlist `%s': " % iTunesDB.kill_unicode(list_name), True)
     try:
         f = open(filename, "r")
-    except IOError, e:
+    except IOError as e:
         log("ERROR: cannot open `%s': %s\n" % (filename, e.strerror))
     tracks = []
 
@@ -1218,13 +1225,13 @@ def make_directory_playlists(db, tracklist):
                 dirs[dir].append(track)
             else:
                 dirs[dir] = [track]
-    dirlist = dirs.keys()
-    dirlist.sort(fncmp)
+    dirlist = list(dirs.keys())
+    dirlist.sort(key=cmp_to_key(fncmp))
 
     for dir in dirlist:
         log("Processing playlist `%s': " % iTunesDB.kill_unicode(dir), True)
         tracks = dirs[dir]
-        tracks.sort(trackcmp)
+        tracks.sort(key=cmp_to_key(trackcmp))
         log("%d tracks\n" % len(tracks))
         db.add_playlist(tracks, dir)
 
@@ -1300,7 +1307,7 @@ def parse_master_playlist_file():
         elif key == "sort":
             try:
                 sort = SortSpec(value) + sort
-            except SSParseError, e:
+            except SSParseError as e:
                 log("WARNING: In %s:%d: %s\n" % (MASTER_PLAYLIST_FILE, lineno, e))
         elif key in ("include", "exclude"):
             if value[0] == "/":
@@ -1386,9 +1393,9 @@ def GenerateArtwork(model, tracklist):
             f = open(ARTWORK_CACHE_FILE, "rb")
         except IOError:
             f = open(OLDNAME(ARTWORK_CACHE_FILE), "rb")
-        old_cache = cPickle.load(f)
+        old_cache = pickle.load(f)
         f.close()
-    except (IOError, EOFError, cPickle.PickleError):
+    except (IOError, EOFError, pickle.PickleError):
         old_cache = ({}, {})
 
     # step 4: generate and save the ArtworkDB
@@ -1398,7 +1405,7 @@ def GenerateArtwork(model, tracklist):
         f = open(ARTWORK_DB_FILE, "wb")
         f.write(artwork_db)
         f.close()
-    except IOError, e:
+    except IOError as e:
         log("FAILED: %s\n" % e.strerror +
             "ERROR: The ArtworkDB file could not be written. This means that the iPod will\n" +
             "not show any artwork items.\n")
@@ -1406,10 +1413,10 @@ def GenerateArtwork(model, tracklist):
     # step 5: save the artwork cache
     try:
         f = open(ARTWORK_CACHE_FILE, "wb")
-        cPickle.dump(new_cache, f)
+        pickle.dump(new_cache, f)
         f.close()
         delete(OLDNAME(ARTWORK_CACHE_FILE), True)
-    except (IOError, EOFError, cPickle.PickleError):
+    except (IOError, EOFError, pickle.PickleError):
         log("ERROR: can't save the artwork cache\n")
 
     # step 6: update the 'mhii link' field
@@ -1480,7 +1487,7 @@ NOTE: The database is already frozen.
         try:
             scrobbler.scrobble()
             log("OK.\n")
-        except scrobble.ScrobbleError, e:
+        except scrobble.ScrobbleError as e:
             log("%s\n" % e)
         except KeyboardInterrupt:
             log("interrupted by user.\n")
@@ -1612,7 +1619,7 @@ NOTE: The database is already frozen.
         f = open(DB_FILE, "wb")
         f.write(db)
         f.close()
-    except IOError, e:
+    except IOError as e:
         write_ok = False
         log("FAILED: %s\n" % e.strerror +
             "ERROR: The iTunesDB file could not be written. This means that the iPod will\n" +
@@ -1628,7 +1635,7 @@ NOTE: The database is already frozen.
             f.write(db)
             f.close()
             log("\n")
-        except IOError, e:
+        except IOError as e:
             write_ok = False
             log("FAILED: %s\n" % e.strerror +
                 "ERROR: The iTunesSD file could not be written. This means that the iPod will\n" +
@@ -1763,17 +1770,17 @@ def ConfigModel():
             model = None
     except IOError:
         model = None
-    print "Select iPod model:"
+    print("Select iPod model:")
     default = 0
-    for i in xrange(len(models)):
+    for i in range(len(models)):
         if model in models[i][:-1]:
             default = i
             c = "*"
         else:
             c = " "
-        print c, "%d." % i, models[i][-1]
+        print(c, "%d." % i, models[i][-1])
     try:
-        answer = int(raw_input("Which model is this iPod? [0-%d, default %d] => " % (len(models) - 1, default)))
+        answer = int(input("Which model is this iPod? [0-%d, default %d] => " % (len(models) - 1, default)))
     except (IOError, EOFError, KeyboardInterrupt, ValueError):
         answer = default
     if (answer < 0) or (answer >= len(models)):
@@ -1818,9 +1825,9 @@ class INIKey:
         return s
 
 def ConfigScrobble():
-    print "Please enter your last.fm username, or just press ENTER if you don't want to"
+    print("Please enter your last.fm username, or just press ENTER if you don't want to")
     try:
-        username = raw_input("use scrobbling => ").strip()
+        username = input("use scrobbling => ").strip()
     except (IOError, EOFError, KeyboardInterrupt):
         username = ""
     if username:
@@ -1829,7 +1836,7 @@ def ConfigScrobble():
         except (IOError, EOFError, KeyboardInterrupt):
             password = ""
         if password:
-            password = md5.md5(password).hexdigest()
+            password = hashlib.md5(password.encode('utf-8', 'replace')).hexdigest()
         else:
             username = ""
     else:
@@ -1918,7 +1925,7 @@ WARNING: The database is currently frozen. If you reset the cache now, you will
 
 class MyOptionParser(optparse.OptionParser):
     def format_help(self, formatter=None):
-        models = iTunesDB.ImageFormats.keys()
+        models = list(iTunesDB.ImageFormats.keys())
         models.sort()
         return optparse.OptionParser.format_help(self, formatter) + """
 Artwork is supported on the following models:
@@ -2014,7 +2021,7 @@ if __name__ == "__main__":
         else:
             log("Unknown action, don't know what to do.\n")
         code = 0
-    except SystemExit, e:
+    except SystemExit as e:
         sys.exit(e.code)
     except KeyboardInterrupt:
         log("\n" + 79*'-' + "\n\nAction aborted by user.\n")

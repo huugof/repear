@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
 # QuickTime parser library for rePear, the iPod database management tool
 # Copyright (C) 2006-2008 Martin J. Fiedler <martin.fiedler@gmx.net>
@@ -17,7 +17,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
-import sys, struct, types
+import sys, struct
 
 ID3v1Genres = { 0:"Blues", 1:"Classic Rock", 2:"Country", 3:"Dance", 4:"Disco",
 5:"Funk", 6:"Grunge", 7:"Hip-Hop", 8:"Jazz", 9:"Metal", 10:"New Age",
@@ -157,8 +157,8 @@ H264ProfileMap = {
 
 
 def chop(s):
-    if s: return (ord(s[0]), s[1:])
-    return (0, "")
+    if s: return (s[0], s[1:])
+    return (0, b"")
 
 def dictremove(d, rlist):
     for r in rlist:
@@ -184,9 +184,9 @@ class QTParser:
     def log_path(self, path, atom, size, start=None):
         if not self.verbose: return
         if start is None:
-            print "%s%s (%d bytes)" % ("  " * len(path), atom, size)
+            print("%s%s (%d bytes)" % ("  " * len(path), atom, size))
         else:
-            print "%s%s (%d bytes @ %d)" % ("  " * len(path), atom, size, start)
+            print("%s%s (%d bytes @ %d)" % ("  " * len(path), atom, size, start))
 
     def err(self, path, message):
         self.errors.append((self.repr_path(path), message))
@@ -220,7 +220,7 @@ class QTParser:
             size = struct.unpack(">L", head[:4])[0] - 8
             if size < 0:
                 return self.err(path, "invalid sub-atom size")
-            atom = head[4:].strip("\0 ").replace('\xa9', '$')
+            atom = head[4:].strip(b"\0 ").replace(b'\xa9', b'$').decode('latin1', 'replace')
             if not atom:
                 break
             self.log_path(path, atom, size, start)
@@ -275,7 +275,7 @@ class QTParser:
         if self.reject(path, size, 12): return
         data = self.f.read(12)
         try:
-            self.tracks[self.trackid]['type'] = QTTrackTypeMap[data[8:]]
+            self.tracks[self.trackid]['type'] = QTTrackTypeMap[data[8:].decode('latin1', 'replace')]
         except KeyError:
             del self.tracks[self.trackid]
 
@@ -286,14 +286,14 @@ class QTParser:
         end = start + size
         start += 8
         media_type = self.gettrack('type')
-        for i in xrange(count):
+        for i in range(count):
             if start > (end - 16):
                 return self.err(path, "description #%d too small" % (i+1))
             self.f.seek(start)
             data = self.f.read(16)
             start += 16
             size = struct.unpack(">L", data[:4])[0] - 16
-            format = data[4:8].strip("\0 ")
+            format = data[4:8].strip(b"\0 ").decode('latin1', 'replace')
             refidx = struct.unpack(">H", data[14:])[0]
             self.log_path(path, format, size, start)
             try:
@@ -337,7 +337,7 @@ class QTParser:
         if (w != self.gettrack('width')) or (h != self.gettrack('height')):
             self.err(path, "video size doesn't match track header value")
         data = self.f.read(32)
-        clen = ord(data[0])
+        clen = data[0]
         if clen > 31:
             self.err(path, "invalid compressor name length")
         elif clen:
@@ -347,13 +347,13 @@ class QTParser:
     def parse_avcC(self, start, size, path):
         if self.reject(path, size, 4): return
         data = self.f.read(4)
-        profile = H264ProfileMap.get(ord(data[1]), None)
-        level = ord(data[3])
+        profile = H264ProfileMap.get(data[1], None)
+        level = data[3]
         if level % 10:
             level = "%d.%d" % (level / 10, level % 10)
         else:
             level = str(level / 10)
-        if (level == "1.1") and (ord(data[2]) & 0x10):
+        if (level == "1.1") and (data[2] & 0x10):
             level = "1b"
         format = "H.264"
         if profile: format += " " + profile
@@ -432,12 +432,12 @@ class QTParser:
 
         def getbits(bitpos, count):
             value = 0
-            for i in xrange(count):
+            for i in range(count):
                 p = bitpos + i
                 idx = p >> 3
                 if idx >= len(data):
                     return (None, bitpos)
-                value = (value << 1) | ((ord(data[idx]) >> (7 - (p & 7))) & 1)
+                value = (value << 1) | ((data[idx] >> (7 - (p & 7))) & 1)
             return (value, bitpos + count)
 
         def get_object_type(bitpos):
@@ -528,14 +528,14 @@ class QTParser:
             self.info[key] = res
 
     def format_text(self, path, data):
-        data = data.strip("\0")
-        if data.startswith("\xfeff"):
-            return unicode(data, 'utf_16')
+        data = data.strip(b"\0")
+        if data.startswith(b"\xfe\xff"):
+            return str(data, 'utf_16')
         else:
-            return unicode(data, 'utf_8')
+            return str(data, 'utf_8')
 
     def format_year(self, path, data):
-        data = data.strip("\0").split('-', 1)[0]
+        data = data.strip(b"\0").split(b'-', 1)[0]
         try:
             return int(data)
         except ValueError:
@@ -544,12 +544,12 @@ class QTParser:
     def format_byte(self, path, data):
         if not data:
             return self.err(path, "zero-length data block")
-        return ord(data[0])
+        return data[0]
 
     def format_genre(self, path, data):
         if not data:
             return self.err(path, "zero-length data block")
-        genre = ID3v1Genres.get(ord(data[-1]) - 1, None)
+        genre = ID3v1Genres.get(data[-1] - 1, None)
         if genre: self.info["genre"] = genre
 
     def format_track(self, path, data, item='track'):
@@ -565,13 +565,13 @@ class QTParser:
         self.artwork.append(data)
 
     def format_flag(self, path, data):
-        return len(data.strip("\0")) != 0
+        return len(data.strip(b"\0")) != 0
 
     def get_repear_info(self):
         info = {}
         have_video = False
         have_audio = False
-        for track in self.tracks.itervalues():
+        for track in self.tracks.values():
             ttype = track.get('type', '?')
             if not(have_audio) and (ttype == 'audio'):
                 ainfo = track.copy()
@@ -596,27 +596,27 @@ class QTParser:
 ################################################################################
 
 def dump_dict(d):
-    keys = d.keys()
+    keys = list(d.keys())
     keys.sort()
     for key in keys:
-        print "    %s = %s" % (key, repr(d[key]))
+        print("    %s = %s" % (key, repr(d[key])))
 
 if __name__ == "__main__":
-    qt = QTParser(file(sys.argv[1], "rb"), True)
-    print
+    qt = QTParser(open(sys.argv[1], "rb"), True)
+    print()
 
-    print "Raw file information:"
+    print("Raw file information:")
     dump_dict(qt.info)
     for track in qt.tracks:
-        print "Raw track information (id %s):" % track
+        print("Raw track information (id %s):" % track)
         dump_dict(qt.tracks[track])
-    print
+    print()
 
-    print "rePear-compliant information:"
+    print("rePear-compliant information:")
     dump_dict(qt.get_repear_info())
-    print
+    print()
 
     if qt.errors:
-        print "Errors:"
-        for e in qt.errors: print "    %s: %s" % e
-        print
+        print("Errors:")
+        for e in qt.errors: print("    %s: %s" % e)
+        print()
