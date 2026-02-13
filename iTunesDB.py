@@ -22,7 +22,11 @@ try:
     import Image, JpegImagePlugin, PngImagePlugin
     PILAvailable = True
 except ImportError:
-    PILAvailable = False
+    try:
+        from PIL import Image, JpegImagePlugin, PngImagePlugin
+        PILAvailable = True
+    except ImportError:
+        PILAvailable = False
 
 
 def DefaultLoggingFunction(text, force_flush=True):
@@ -195,7 +199,9 @@ class TrackItemRecord(Record):
         else:
             default_has_artwork = False
             default_artwork_size = 0
-        if 'video format' in info:
+        if info.get('audiobook', False):
+            media_type = 8
+        elif 'video format' in info:
             media_type = 2
         else:
             media_type = 1
@@ -206,7 +212,7 @@ class TrackItemRecord(Record):
             F_ChildCount(),
             F_Int32(info.get('id', 0)),                                   # !!!
             F_Int32(info.get('visible', 1)), # visible
-            F_Tag({"mp3": " 3PM", "aac": " CAA", "mp4a": "A4PM"}.get(format[:3], "\0\0\0\0")),
+            F_Tag({"mp3": " 3PM", "aac": " CAA", "mp4": "A4PM"}.get(format[:3], "\0\0\0\0")),
             F_Int16({"mp3-cbr": 0x100, "mp3-vbr": 0x101, "aac": 0, "mp4a": 0}.get(format, 0)),
             F_Int8(info.get('compilation', 0)),
             F_Int8(info.get('rating', 0)),
@@ -330,10 +336,11 @@ class PlaylistRecord(Record):
             F_Int32(len(order)),
             F_Padding(40)
         ))
-        arr = array.array('L', order)
-        # the array module doesn't directly support endianness, so we detect
-        # the machine's endianness and swap if it is big-endian
-        if ord(array.array('L', [1]).tostring()[3]):
+        # iTunesDB playlist indices are always 32-bit values.
+        # On modern 64-bit Python builds, array('L') can be 8 bytes and
+        # produces corrupted index tables, so force unsigned 32-bit storage.
+        arr = array.array('I', order)
+        if sys.byteorder == 'big':
             arr.byteswap()
         data = arr.tostring()
         mhod.add(data)

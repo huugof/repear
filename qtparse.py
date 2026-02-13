@@ -429,37 +429,78 @@ class QTParser:
 
     def parse_MP4DecSpecificDescr_MPEG4Audio(self, path, data):
         if self.reject(path, len(data), 2, False): return
-        a, data = chop(data)
-        b, data = chop(data)
-        profile = (a >> 3) & 0x1F
-        freq = ((a << 1) | (b >> 7)) & 0x0F
+
+        def getbits(bitpos, count):
+            value = 0
+            for i in xrange(count):
+                p = bitpos + i
+                idx = p >> 3
+                if idx >= len(data):
+                    return (None, bitpos)
+                value = (value << 1) | ((ord(data[idx]) >> (7 - (p & 7))) & 1)
+            return (value, bitpos + count)
+
+        def get_object_type(bitpos):
+            objtype, bitpos = getbits(bitpos, 5)
+            if objtype is None:
+                return (None, bitpos)
+            if objtype == 31:
+                ext, bitpos = getbits(bitpos, 6)
+                if ext is None:
+                    return (None, bitpos)
+                objtype = 32 + ext
+            return (objtype, bitpos)
+
+        def get_sampling_rate(bitpos):
+            sf_idx, bitpos = getbits(bitpos, 4)
+            if sf_idx is None:
+                return (0, bitpos)
+            if sf_idx == 15:
+                freq, bitpos = getbits(bitpos, 24)
+                if freq is None:
+                    return (0, bitpos)
+                return (freq, bitpos)
+            try:
+                return ((96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050,
+                         16000, 12000, 11025, 8000, 7350)[sf_idx], bitpos)
+            except IndexError:
+                self.err(path, "invalid sampling rate code %d" % sf_idx)
+                return (0, bitpos)
+
+        bitpos = 0
+        profile, bitpos = get_object_type(bitpos)
+        if profile is None:
+            return self.err(path, "truncated AAC descriptor")
+        freq, bitpos = get_sampling_rate(bitpos)
+        dummy, bitpos = getbits(bitpos, 4)  # channelConfiguration
+        if dummy is None:
+            return self.err(path, "truncated AAC descriptor")
+
+        # HE-AAC descriptors carry both core and extension sample rates.
+        # Use the extension rate for consistency with the stsd stream rate.
+        if profile in (5, 29):
+            ext_freq, bitpos = get_sampling_rate(bitpos)
+            ext_profile, bitpos = get_object_type(bitpos)
+            if ext_freq:
+                freq = ext_freq
+            if ext_profile and not(profile in MP4ProfileMap):
+                profile = ext_profile
+
         try:
             self.settrack('filetype', "MPEG-4 " + MP4ProfileMap[profile])
         except KeyError:
             pass
-        if freq == 15:
-            if self.reject(path, len(data), 3, False): return
-            freq = b & 0x7F
-            b, data = chop(data)
-            freq = (freq << 7) | b
-            b, data = chop(data)
-            freq = (freq << 7) | b
-            b, data = chop(data)
-            freq = (freq << 1) | (b >> 7)
-        else:
-            try:
-                freq = (96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350)[freq]
-            except IndexError:
-                self.err(path, "invalid sampling rate code %d" % freq)
-                freq = 0
         if freq:
             ref = self.gettrack('sample rate')
             if not ref:
                 self.settrack('sample rate', freq)
             elif freq != ref:
-                self.err(path, "sample rate in AAC descriptor (%d) doesn't match sample rate in stream description (%d)" % (freq, ref))
-        if data:
-            return self.err(path, "descriptor is longer than expected")
+                # Some AAC profiles (notably HE-AAC) may disagree by a factor
+                # of 2 between core and effective sample rate.
+                if (freq == 2 * ref) or (ref == 2 * freq):
+                    self.settrack('sample rate', max(freq, ref))
+                else:
+                    self.err(path, "sample rate in AAC descriptor (%d) doesn't match sample rate in stream description (%d)" % (freq, ref))
 
     def parse_MP4DecSpecificDescr_MPEG4Visual(self, path, data):
         self.settrack('video format', 'MPEG-4 ASP')
@@ -563,14 +604,14 @@ def dump_dict(d):
 if __name__ == "__main__":
     qt = QTParser(file(sys.argv[1], "rb"), True)
     print
-    
+
     print "Raw file information:"
     dump_dict(qt.info)
     for track in qt.tracks:
         print "Raw track information (id %s):" % track
         dump_dict(qt.tracks[track])
     print
-    
+
     print "rePear-compliant information:"
     dump_dict(qt.get_repear_info())
     print

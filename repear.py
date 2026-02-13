@@ -923,6 +923,18 @@ def freeze_dir(cache, index, allocator, playlists=[], base="", artwork=None):
                         info['original path'] = unicode(info['path'], sys.getfilesystemencoding(), 'replace')
                     info['path'] = path
 
+            # tag .m4b files as audiobooks
+            if ext == ".m4b":
+                filetype = printable(info.get('filetype', "")).lower()
+                if ("he-aac" in filetype) or ("aac+" in filetype):
+                    log("[SKIPPED]\n" +
+                        "WARNING: `%s' uses HE-AAC and will not be imported. " % printable(fullname) +
+                        "Convert it to AAC-LC (.m4b/.m4a) and run freeze again.\n")
+                    continue
+                info['audiobook'] = True
+                info['bookmark flag'] = 1
+                info['shuffle flag'] = 0
+
             # move the track to where it belongs
             if not already_there:
                 path = info.get('path', None)
