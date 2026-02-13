@@ -126,12 +126,6 @@ This includes:
 
 - Model selection (required for artwork generation)
 - FWID setup (checksum support for newer classic-era iPods)
-- Last.fm scrobble credentials (optional)
-
-Clock sync guidance:
-
-- If you use scrobbling, keep Mac and iPod clocks aligned.
-- Timestamp mismatches can cause last.fm submission rejection.
 
 ### 4. Import tracks (optional)
 
@@ -230,11 +224,6 @@ Before unplugging, freeze again:
 ```bash
 python3 repear.py --root "/Volumes/<iPod Name>" freeze
 ```
-
-If scrobbling is enabled:
-
-- play count / timestamp data is submitted during freeze/update
-- failed submissions are queued and retried later
 
 ### 4. Disconnect the iPod and listen to your music
 
@@ -393,29 +382,10 @@ Practical macOS tip:
 
 - Keep non-music images out of top-level library folders, or they may be reused broadly by inheritance.
 
-## Details on last.fm scrobbling
+## Details on last.fm scrobbling (removed)
 
-Scrobble config file:
-
-- `repear_scrobble.ini` in iPod root
-
-Expected keys:
-
-- `username = ...`
-- `password = ...` (plaintext or MD5 hash)
-- optional repeated `exclude = ...`
-
-`exclude` can be:
-
-- directory paths
-- wildcard patterns
-
-Use this to skip tracks from scrobbling (for example audiobooks).
-
-Security note:
-
-- MD5 is obfuscation, not secure modern password storage.
-- Prefer using the built-in config flow and avoid sharing this file.
+Last.fm scrobbling has been removed from this fork. There is no scrobble action,
+no scrobble config file, and no Last.fm submission step during `freeze`/`update`.
 
 ## A more detailed look at rePear's options and actions
 
@@ -441,10 +411,8 @@ If no action is provided, rePear defaults to `auto`.
   - detect and store iPod serial/FWID for checksum support
 - `cfg-model`
   - interactive model selection for artwork support
-- `cfg-scrobble`
-  - interactive scrobble setup
 - `config`
-  - run all config steps (`cfg-fwid`, `cfg-model`, `cfg-scrobble`)
+  - run all config steps (`cfg-fwid`, `cfg-model`)
 
 ### Command-line options
 
@@ -468,8 +436,6 @@ Options:
   - skip dangerous-action confirmation prompts
 - `-p, --playlist FILE`
   - override playlist config file
-- `-s, --scrobble FILE`
-  - override scrobble config file
 - `--nowait`
   - Windows-only keypress wait toggle
 
@@ -493,4 +459,3 @@ Valid model names:
   - HE-AAC/AAC+ `.m4b` files are skipped; convert to AAC-LC and re-freeze.
 - Playback issues after interruption
   - Reconnect, run `freeze` again, and inspect `repear.log`.
-

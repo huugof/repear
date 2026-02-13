@@ -31,19 +31,19 @@ TODO: preserve .m3u playlists on update
  - added support for the 'mhii link' field, required for artwork on nano 4G
 
 0.4.0:
- - added command-line options to override master playlist and scrobble config
+ - added command-line options to override master playlist config
    file names (either relative to the root directory or relative to the
    working directory from which rePear is being run)
  - fixed crash bug for rare broken ID3v2 tags
  - added 'help' action
 
 0.4.0-rc2:
- - fixed crash after scrobbling
+ - fixed crash in optional features
 
 0.4.0-rc1:
  - added configuration actions
  - root directory auto-detection now checks current working directory, too
- - fixed time calculations (required for proper scrobbling)
+ - fixed time calculations
  - fixed artwork processing if an artwork file is broken
  - fixed broken sort function
 
@@ -52,7 +52,6 @@ TODO: preserve .m3u playlists on update
  - added support for MPEG-4 audio files
  - added experimental support for MPEG-4 video files
  - added Play Counts import to update play and skip counts and ratings
- - added last.fm scrobble support
  - added 'update' action
  - added playlist sort functionality
  - added global playlist option "skip album playlists = no" to disable
@@ -121,25 +120,24 @@ DISSECT_BASE_DIR = "Dissected Tracks/"
 DIRECTORY_COUNT = 10
 DEFAULT_LAME_OPTS = "--quiet -h -V 5"
 MASTER_PLAYLIST_FILE = "repear_playlists.ini"
-SCROBBLE_CONFIG_FILE = "repear_scrobble.ini"
 SUPPORTED_FILE_FORMATS = (".mp3", ".ogg", ".m4a", ".m4b", ".mp4")
 MUSIC_DIR = "iPod_Control/Music/"
 CONTROL_DIR = "iPod_Control/iTunes/"
 ARTWORK_DIR = "iPod_Control/Artwork/"
+EMBEDDED_ARTWORK_DIR = ARTWORK_DIR + "repear.embedded/"
 DB_FILE = CONTROL_DIR + "iTunesDB"
 CACHE_FILE = CONTROL_DIR + "repear.cache"
 MODEL_FILE = CONTROL_DIR + "repear.model"
 FWID_FILE = CONTROL_DIR + "fwid"
-SCROBBLE_QUEUE_FILE = CONTROL_DIR + "repear.scrobble_queue"
 ARTWORK_CACHE_FILE = ARTWORK_DIR + "repear.artwork_cache"
 ARTWORK_DB_FILE = ARTWORK_DIR + "ArtworkDB"
 def OLDNAME(x): return x.replace("repear", "retune")
 
 import sys, optparse, os, fnmatch, stat, string, time, types, pickle, random
-import re, warnings, traceback, getpass, hashlib
+import re, warnings, traceback, hashlib
 from functools import cmp_to_key
 warnings.filterwarnings('ignore', category=RuntimeWarning)  # for os.tempnam()
-import iTunesDB, mp3info, hash58, scrobble
+import iTunesDB, mp3info, hash58
 Options = {}
 
 
@@ -149,6 +147,7 @@ Options = {}
 
 broken_log = False
 homedir = ""
+logfile = None
 
 def open_log():
     global logfile
@@ -338,6 +337,8 @@ def move_file(src, dest):
 
 def backup(filename):
     dest = "%s.repear_backup" % filename
+    if not os.path.exists(filename):
+        return False
     if os.path.exists(dest): return
     try:
         os.rename(filename, dest)
@@ -356,6 +357,50 @@ def delete(filename, may_fail=False):
         if not may_fail:
             log("ERROR: Cannot delete `%s': %s\n" % (filename, e.strerror))
         return False
+
+
+def embedded_artwork_extension(data, mime=""):
+    mime = printable(mime).lower()
+    if "jpeg" in mime or "jpg" in mime:
+        return ".jpg"
+    if "png" in mime:
+        return ".png"
+    if data.startswith(b"\xFF\xD8\xFF"):
+        return ".jpg"
+    if data.startswith(b"\x89PNG\r\n\x1A\n"):
+        return ".png"
+    return None
+
+
+def extract_embedded_artwork_file(info):
+    data = info.pop('embedded artwork data', None)
+    mime = info.pop('embedded artwork mime', "")
+    info.pop('embedded artwork score', None)
+    if not data:
+        return None
+
+    ext = embedded_artwork_extension(data, mime)
+    if not ext:
+        return None
+
+    try:
+        os.makedirs(EMBEDDED_ARTWORK_DIR[:-1])
+    except OSError:
+        pass
+
+    digest = hashlib.sha1(data).hexdigest()
+    path = EMBEDDED_ARTWORK_DIR + digest + ext
+    if os.path.isfile(path):
+        return path
+
+    try:
+        f = open(path, "wb")
+        f.write(data)
+        f.close()
+    except IOError as e:
+        log("WARNING: can't write extracted embedded artwork `%s': %s\n" % (path, e.strerror))
+        return None
+    return path
 
 
 class ExceptionLogHelper:
@@ -418,7 +463,7 @@ class Allocator:
             digits.append(len(elem) - 1)
         if digits:
             digits.sort()
-            self.fmt = "F%%0%dd" % (digits[len(digits) / 2])
+            self.fmt = "F%%0%dd" % (digits[len(digits) // 2])
         else:
             self.fmt = "F%02d"
         if not self.files:
@@ -560,7 +605,7 @@ class BalancedShuffle:
 
     def fill(self, data, total):
         ones = len(data)
-        invert = (ones > (total / 2))
+        invert = (ones > (total // 2))
         if invert:
             ones = total - ones
         bitmap = [0] * total
@@ -581,10 +626,10 @@ class BalancedShuffle:
 
 
 ################################################################################
-## Play Counts import and Scrobbling                                          ##
+## Play Counts import                                                         ##
 ################################################################################
 
-def ImportPlayCounts(cache, index, scrobbler=None):
+def ImportPlayCounts(cache, index):
     log("Updating play counts and ratings ... ", True)
 
     # open Play Counts file
@@ -642,8 +687,6 @@ def ImportPlayCounts(cache, index, scrobbler=None):
                 updated = True
             if updated:
                 update_count += 1
-            if item.play_count and scrobbler:
-                scrobbler += track
         pc.f.close()
         del pc
     except (IOError, iTunesDB.InvalidFormat):
@@ -942,6 +985,19 @@ def freeze_dir(cache, index, allocator, playlists=[], base="", artwork=None):
                 info['bookmark flag'] = 1
                 info['shuffle flag'] = 0
 
+            # extract embedded artwork from metadata (if present)
+            embedded_artwork = extract_embedded_artwork_file(info)
+            if embedded_artwork:
+                info['artwork'] = embedded_artwork
+            elif valid and not info.get('artwork', None):
+                # cache entries created before embedded-art support may miss
+                # extracted artwork; probe once to enrich them.
+                probe = mp3info.GetAudioFileInfo(fullname)
+                if probe:
+                    embedded_artwork = extract_embedded_artwork_file(probe)
+                    if embedded_artwork:
+                        info['artwork'] = embedded_artwork
+
             # move the track to where it belongs
             if not already_there:
                 path = info.get('path', None)
@@ -957,8 +1013,10 @@ def freeze_dir(cache, index, allocator, playlists=[], base="", artwork=None):
                 allocator.add(fullname)
                 log("[OK]\n", True)
 
-            # associate artwork to the track
-            info['artwork'] = image_assoc.get(key, artwork)
+            # sidecar/folder images are preferred over embedded artwork
+            ref_artwork = image_assoc.get(key, artwork)
+            if ref_artwork:
+                info['artwork'] = ref_artwork
 
             # check for unique artist and album
             check = info.get('artist', None)
@@ -1380,6 +1438,8 @@ def GenerateArtwork(model, tracklist):
             artwork_list[artwork].append(dbid)
         else:
             artwork_list[artwork] = [dbid]
+    if not artwork_list:
+        log("WARNING: No artwork sources were matched (sidecar .jpg/.png or embedded artwork).\n")
 
     # step 2: generate the artwork directory (if it doesn't exist already)
     try:
@@ -1466,37 +1526,11 @@ NOTE: The database is already frozen.
     log("Indexing track cache ...\n", True)
     index = make_cache_index(cache)
 
-    # allocate scrobbler
-    scrobbler = scrobble.Scrobbler()
-    if scrobbler.config(SCROBBLE_CONFIG_FILE):
-        if not scrobbler.load(SCROBBLE_QUEUE_FILE):
-            scrobbler.load(OLDNAME(SCROBBLE_QUEUE_FILE))
-    else:
-        scrobbler = None
-
     # import Play Counts information
-    if ImportPlayCounts(cache, index, scrobbler):
+    if ImportPlayCounts(cache, index):
         # save cache and delete the play counts file afterwards
         save_cache((state, cache))
         delete(CONTROL_DIR + "Play Counts", may_fail=True)
-
-    # scrobble
-    if scrobbler and scrobbler.queue:
-        old_count = len(scrobbler.queue)
-        log("Scrobbling %d track(s) ... " % old_count, True)
-        try:
-            scrobbler.scrobble()
-            log("OK.\n")
-        except scrobble.ScrobbleError as e:
-            log("%s\n" % e)
-        except KeyboardInterrupt:
-            log("interrupted by user.\n")
-        new_count = len(scrobbler.queue)
-        log("%s track(s) scrobbled, %d track(s) still in queue.\n" % (old_count - new_count, new_count))
-        if scrobbler.save(SCROBBLE_QUEUE_FILE):
-            delete(OLDNAME(SCROBBLE_QUEUE_FILE), True)
-        else:
-            log("Error writing scrobbler state file.\n")
 
     # now go for the real thing
     playlists = []
@@ -1647,7 +1681,7 @@ NOTE: The database is already frozen.
     if write_ok:
         log("\nYou can now unmount the iPod and listen to your music.\n")
         sec = int(sum([track.get('length', 0.0) for track in tracklist]) + 0.5)
-        log("There are %d tracks (%d:%02d:%02d" % (len(tracklist), sec/3600, (sec/60)%60, sec%60))
+        log("There are %d tracks (%d:%02d:%02d" % (len(tracklist), sec//3600, (sec//60)%60, sec%60))
         if sec > 86400: log(" = %.1f days" % (sec / 86400.0))
         log(") waiting for you to be heard.\n")
 
@@ -1799,90 +1833,9 @@ def ConfigModel():
     delete(OLDNAME(MODEL_FILE), True)
 
 
-re_ini_key = re.compile(r'^[ \t]*(;)?[ \t]*(\w+)[ \t]*=[ \t]*(.*?)[ \t]*$', re.M)
-class INIKey:
-    def __init__(self, key, value):
-        self.key = key
-        self.value = value
-        self.present = False
-        self.valid = False
-    def check(self, m):
-        if not m: return
-        if m.group(2).lower() != self.key: return
-        self.present = True
-        valid = not(not(m.group(1)))
-        if not(valid) and self.valid: return
-        self.start = m.start(3)
-        self.end = m.end(3)
-        self.comment = m.start(1)
-    def apply(self, s):
-        if not self.present:
-            if not s.endswith("\n"): s += "\n"
-            return s + "%s = %s\n" % (self.key, self.value)
-        s = s[:self.start] + self.value + s[self.end:]
-        if not(self.valid) and (self.comment >= 0):
-            s = s[:self.comment] + s[self.comment+1:]
-        return s
-
-def ConfigScrobble():
-    print("Please enter your last.fm username, or just press ENTER if you don't want to")
-    try:
-        username = input("use scrobbling => ").strip()
-    except (IOError, EOFError, KeyboardInterrupt):
-        username = ""
-    if username:
-        try:
-            password = getpass.getpass("password => ")
-        except (IOError, EOFError, KeyboardInterrupt):
-            password = ""
-        if password:
-            password = hashlib.md5(password.encode('utf-8', 'replace')).hexdigest()
-        else:
-            username = ""
-    else:
-        password = ""
-
-    # import config file
-    try:
-        f = open(SCROBBLE_CONFIG_FILE, "rb")
-        config = f.read()
-        f.close()
-    except IOError:
-        config = ""
-    crlf = (config.find("\r\n") >= 0)
-    config = config.replace("\r\n", "\n")
-
-    kuser = INIKey("username", username)
-    kpass = INIKey("password", password)
-    for m in re_ini_key.finditer(config):
-        kuser.check(m)
-        kpass.check(m)
-    if kuser.present and kpass.present and (kuser.start < kpass.start):
-        config = kpass.apply(config)
-        config = kuser.apply(config)
-    else:
-        config = kuser.apply(config)
-        config = kpass.apply(config)
-
-    # export config file
-    if crlf:
-        config = config.replace("\n", "\r\n")
-    try:
-        f = open(SCROBBLE_CONFIG_FILE, "wb")
-        f.write(config)
-        f.close()
-        if username:
-            log("Scrobbling enabled for user `%s'.\n\n" % username)
-        else:
-            log("Scrobbling disabled.\n\n")
-    except IOError:
-        log("Error updating the scrobble config file.\n\n")
-
-
 def ConfigAll():
     ConfigFWID()
     ConfigModel()
-    ConfigScrobble()
 
 
 ################################################################################
@@ -1940,7 +1893,6 @@ actions:
   reset        clear rePear's metadata cache
   cfg-fwid     determine the iPod's serial number and save it
   cfg-model    interactively configure the iPod model
-  cfg-scrobble configure last.fm scrobbling
   config       run all of the configuration steps
 If no action is specified, rePear automatically determines which of the
 `freeze' or `unfreeze' actions should be taken.
@@ -1962,8 +1914,6 @@ if __name__ == "__main__":
                       help="skip confirmation prompts for dangerous actions")
     parser.add_option("-p", "--playlist", action="store", default=None, metavar="FILE",
                       help="specify playlist config file")
-    parser.add_option("-s", "--scrobble", action="store", default=None, metavar="FILE",
-                      help="specify scrobble config file")
     if os.name == 'nt':
         parser.add_option("--nowait", action="store_true", default=False,
                           help="don't wait for keypress when finished")
@@ -1980,7 +1930,7 @@ if __name__ == "__main__":
         sys.exit(0)
     if not action in (
         'auto', 'freeze', 'unfreeze', 'update', 'dissect', 'reset', \
-        'config', 'cfg-fwid', 'cfg-scrobble', 'cfg-model'
+        'config', 'cfg-fwid', 'cfg-model'
     ):
         parser.error("invalid action `%s'" % action)
 
@@ -1998,13 +1948,6 @@ if __name__ == "__main__":
         else:
             MASTER_PLAYLIST_FILE = Options['playlist']
         log("master playlist file is `%s'\n" % MASTER_PLAYLIST_FILE)
-    if Options['scrobble']:
-        first = Options['scrobble'].replace("\\", "/").split('/', 1)[0]
-        if first in (".", ".."):
-            SCROBBLE_CONFIG_FILE = os.path.normpath(os.path.join(oldcwd, Options['scrobble']))
-        else:
-            SCROBBLE_CONFIG_FILE = Options['scrobble']
-        log("scrobble configuration file is `%s'\n" % SCROBBLE_CONFIG_FILE)
 
     log("\n")
     try:
@@ -2017,7 +1960,6 @@ if __name__ == "__main__":
         elif action=="config":       ConfigAll()
         elif action=="cfg-fwid":     ConfigFWID()
         elif action=="cfg-model":    ConfigModel()
-        elif action=="cfg-scrobble": ConfigScrobble()
         else:
             log("Unknown action, don't know what to do.\n")
         code = 0

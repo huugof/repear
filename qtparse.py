@@ -175,6 +175,7 @@ class QTParser:
         self.tracks = {}
         self.trackid = None
         self.artwork = []
+        self.last_data_format = None
         self.errors = []
 
         self.f.seek(0, 2)
@@ -350,9 +351,9 @@ class QTParser:
         profile = H264ProfileMap.get(data[1], None)
         level = data[3]
         if level % 10:
-            level = "%d.%d" % (level / 10, level % 10)
+            level = "%d.%d" % (level // 10, level % 10)
         else:
-            level = str(level / 10)
+            level = str(level // 10)
         if (level == "1.1") and (data[2] & 0x10):
             level = "1b"
         format = "H.264"
@@ -521,6 +522,7 @@ class QTParser:
             parser = getattr(self, "format_" + parser)
         except AttributeError:
             return self.err(path, "format parser `%s' doesn't exist" % parser)
+        self.last_data_format = format
         res = parser(path, self.f.read(size - 8))
         if key:
             if res is None:
@@ -562,7 +564,7 @@ class QTParser:
         return self.format_track(path, data, 'disc')
 
     def format_artwork(self, path, data):
-        self.artwork.append(data)
+        self.artwork.append((self.last_data_format, data))
 
     def format_flag(self, path, data):
         return len(data.strip(b"\0")) != 0
@@ -585,6 +587,34 @@ class QTParser:
                 info.update(vinfo)
                 have_video = True
         info.update(self.info)
+        if self.artwork:
+            best = None
+            for format_id, data in self.artwork:
+                if not data:
+                    continue
+                mime = None
+                score = 0
+                if format_id == 13:
+                    mime = "image/jpeg"
+                    score = 3
+                elif format_id == 14:
+                    mime = "image/png"
+                    score = 3
+                elif data.startswith(b"\xFF\xD8\xFF"):
+                    mime = "image/jpeg"
+                    score = 2
+                elif data.startswith(b"\x89PNG\r\n\x1A\n"):
+                    mime = "image/png"
+                    score = 2
+                else:
+                    score = 1
+                candidate = (score, len(data), data, mime)
+                if (best is None) or (candidate > best):
+                    best = candidate
+            if best:
+                info['embedded artwork data'] = best[2]
+                if best[3]:
+                    info['embedded artwork mime'] = best[3]
         if ('album artist' in info) and not('artist' in info):
             info['artist'] = info['album artist']
         if have_video:

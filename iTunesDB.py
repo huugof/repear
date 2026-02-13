@@ -29,6 +29,12 @@ except ImportError:
     except ImportError:
         PILAvailable = False
 
+if PILAvailable:
+    try:
+        RESAMPLE_LANCZOS = Image.Resampling.LANCZOS
+    except AttributeError:
+        RESAMPLE_LANCZOS = getattr(Image, "LANCZOS", Image.ANTIALIAS)
+
 
 def DefaultLoggingFunction(text, force_flush=True):
     sys.stdout.write(text)
@@ -505,7 +511,7 @@ class ArtworkFormat:
     def __init__(self, descriptor, cache_info=(0,0)):
         self.fid, self.height, self.width, self.format = descriptor
         self.filename = "F%04d_1.ithmb" % self.fid
-        self.size = self.width * self.height * self.format.bpp/8
+        self.size = self.width * self.height * self.format.bpp // 8
         self.fullname = "iPod_Control/Artwork/" + self.filename
 
         # check if the cache file can be used
@@ -531,8 +537,8 @@ class ArtworkFormat:
         # open the destination file
         try:
             self.f = open(self.fullname, "wb")
-        except IOError as e:
-            log("WARNING: Error opening the artwork data file `%s'\n", self.filename)
+        except IOError:
+            log("WARNING: Error opening the artwork data file `%s'\n" % self.filename)
             self.f = None
 
     def close(self):
@@ -558,18 +564,18 @@ class ArtworkFormat:
 
             # sx/sy = resulting image size
             sx = self.width
-            sy = image.size[1] * sx / image.size[0]
+            sy = image.size[1] * sx // image.size[0]
             if sy > self.height:
                 sy = self.height
-                sx = image.size[0] * sy / image.size[1]
+                sx = image.size[0] * sy // image.size[1]
             # mx/my = margin size
             mx = self.width  - sx
             my = self.height - sy
 
             # process the image
-            temp = image.resize((sx, sy), Image.ANTIALIAS)
+            temp = image.resize((sx, sy), RESAMPLE_LANCZOS)
             thumb = Image.new('RGB', (self.width, self.height), (255, 255, 255))
-            thumb.paste(temp, (mx/2, my/2))
+            thumb.paste(temp, (mx//2, my//2))
             del temp
             data = self.format.convert(thumb.tobytes())
             del thumb
@@ -578,7 +584,7 @@ class ArtworkFormat:
         try:
             self.f.seek(self.size * index)
             self.f.write(data)
-        except IOError:
+        except (IOError, AttributeError, TypeError):
             log(" [WRITE ERROR]", True)
 
         # return image metadata

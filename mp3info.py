@@ -265,6 +265,41 @@ def HandleID3v2Frame(frame, payload, flags, info):
         if len(parts)<2: return  # broken frame
         text = parts[1]
 
+    elif frame_name=="APIC":
+        # attached picture
+        try:
+            encoding = payload[0]
+            data = payload[1:]
+            mime_raw, data = data.split(b"\0", 1)
+            mime = mime_raw.decode("iso-8859-1", "replace").strip().lower()
+            if not data:
+                return
+            pic_type = data[0]
+            data = data[1:]
+
+            # skip description string
+            if encoding in (0, 3):
+                parts = data.split(b"\0", 1)
+                if len(parts) < 2:
+                    return
+                image_data = parts[1]
+            else:
+                sep = data.find(b"\0\0")
+                if sep < 0:
+                    return
+                image_data = data[sep+2:]
+            if not image_data:
+                return
+
+            # prefer front cover over other picture types
+            score = {3: 3, 0: 2, 1: 0}.get(pic_type, 1)
+            if score >= info.get('embedded artwork score', -1):
+                info['embedded artwork data'] = image_data
+                info['embedded artwork mime'] = mime
+                info['embedded artwork score'] = score
+        except (IndexError, ValueError, UnicodeDecodeError):
+            return
+
     if text:  ##### apply the current textual frame ####
         key = ID3v2FrameMap.get(frame_name, frame_name)
         text = text.strip()
@@ -424,7 +459,7 @@ def ScanMP3(f, info, start_offset=0):
         bitrate = mp3_bitrates[version][b2>>4]
         samplerate = mp3_samplerates[version][(b2>>2) & 3]
         padding = (b2>>1) & 1
-        framesize = 72000 * (version+1) * bitrate / samplerate + padding
+        framesize = 72000 * (version+1) * bitrate // samplerate + padding
 
         # skip frame data
         try:
