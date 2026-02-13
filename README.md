@@ -96,14 +96,14 @@ Important: `.m4b` files encoded as **HE-AAC / AAC+** are skipped. Convert them t
 ffprobe -v error -select_streams a:0 -show_entries stream=codec_name,profile -of default=noprint_wrappers=1 "book.m4b"
 ```
 
-### Convert one file to AAC-LC `.m4b` (preserve tags + embedded cover)
+### Convert one file to AAC-LC `.m4b` (preserve tags + embedded cover + chapters)
 
 ```bash
 ffmpeg -i "book.m4b" \
-  -map 0:a:0 -map '0:v:0?' -dn \
-  -c:a aac -profile:a aac_low -b:a 96k \
-  -c:v copy -disposition:v:0 attached_pic \
-  -map_metadata 0 -map_chapters -1 \
+  -map 0:a -map "0:v?" -dn \
+  -c:a aac -profile:a aac_low -ar 44100 -ac 1 -b:a 96k \
+  -c:v copy \
+  -map_metadata 0 -map_chapters 0 \
   -f ipod "book.aaclc.m4b"
 ```
 
@@ -112,18 +112,20 @@ ffmpeg -i "book.m4b" \
 ```bash
 for f in *.m4b; do
   ffmpeg -i "$f" \
-    -map 0:a:0 -map '0:v:0?' -dn \
-    -c:a aac -profile:a aac_low -b:a 96k \
-    -c:v copy -disposition:v:0 attached_pic \
-    -map_metadata 0 -map_chapters -1 \
+    -map 0:a -map "0:v?" -dn \
+    -c:a aac -profile:a aac_low -ar 44100 -ac 1 -b:a 96k \
+    -c:v copy \
+    -map_metadata 0 -map_chapters 0 \
     -f ipod "${f%.m4b}.aaclc.m4b"
 done
 ```
 
 Notes:
 - `-map_metadata 0` keeps title/artist/album/year tags.
-- `-map '0:v:0?'` keeps embedded cover art when present.
+- `-map_chapters 0` keeps chapter markers.
+- `-map "0:v?"` keeps embedded cover art when present and avoids zsh glob expansion errors.
 - `-dn` avoids problematic data/text streams that can fail iPod muxing.
+- If a path contains spaces, wrap it in quotes and do not escape spaces inside the quotes.
 
 After conversion, copy converted files to the iPod and run `freeze` again.
 

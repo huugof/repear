@@ -457,5 +457,10 @@ Valid model names:
   - First run is always slower; use `update` when adding no new files.
 - `.m4b` skipped
   - HE-AAC/AAC+ `.m4b` files are skipped; convert to AAC-LC and re-freeze.
+  - Single-file conversion (preserves metadata, chapters, and cover art):
+    ```bash
+    ffmpeg -i "/path/to/book.m4b" -map 0:a -map "0:v?" -c:v copy -map_metadata 0 -map_chapters 0 -c:a aac -profile:a aac_low -ar 44100 -ac 1 -b:a 96k -f ipod "/path/to/book-lc.m4b"
+    ```
+  - In zsh, keep `0:v?` quoted (`"0:v?"`) to avoid `no matches found`.
 - Playback issues after interruption
   - Reconnect, run `freeze` again, and inspect `repear.log`.
